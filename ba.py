@@ -6,14 +6,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
 from enum import Enum
 
-BITS = True
-PLOT = True
-log = np.log2 if BITS else np.log
-exp = (lambda x: 2**x) if BITS else np.exp
-p = 1e-4
+
+log = np.log
+exp = np.exp
 
 # The 4 bases for mRNA.
 Base = Enum('Base', ['A', 'C', 'G', 'U'])
@@ -95,10 +92,7 @@ def blahut_arimoto(W, iterations=10):
   assert np.all(np.isclose(W.sum(axis=0), 1.))
 
   # Initialize Q as the uniform distribution.
-  pd = np.random.randn(x)
-  Q = exp(pd) / np.sum(exp(pd)) # np.ones(x) / x
-
-  print(f'iteration #0: I(Q, W)={I(Q, W)}')
+  Q = np.ones(x) / x
 
   # List of (mutual info, lower bound, upper bound).
   its = []
@@ -127,19 +121,38 @@ def blahut_arimoto(W, iterations=10):
     eT = exp(T)
     Q = eT/eT.sum()
 
+    print(T-log(Q))
     diff = T-log(Q)
-    m, M = min(diff), max(diff)
+    m, M = np.min(diff), np.max(diff)
     Ip = I(Q, W)
     its.append((Ip, m, M))
-    print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
   return Q, its
 
+def plot(Q, its):
+  '''plot iterations of BA algorithm.'''
+  Is, ms, Ms = zip(*its)
+  plt.plot(range(1, len(Is)+1), Is, lw=2, marker='x', label='I(Q,W)')
+  plt.plot(range(1, len(ms)+1), ms, lw=2, marker='o', label='min T-log Q')
+  plt.plot(range(1, len(Ms)+1), Ms, lw=2, marker='o', label='max T-log Q')
+  plt.xlabel('iteration')
+  plt.ylabel('mutual info (bounds)')
+  plt.legend(loc='lower right')
+  plt.show()
 
-if __name__ == '__main__':
+
+def main(args):
+  global log, exp
+  if args.bits:
+    log, exp = np.log2, lambda x: 2**x
+
+  # Get codon table.
   rna = Bio.Data.CodonTable.standard_rna_table
   Gx = {**rna.forward_table, **{codon: 'Stop' for codon in rna.stop_codons}}
   G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
+
+  # Generate channel noise distribution.
+  p = args.p
   W = np.array([[
       1-p if G[x] == y else p/20
       for x in Codon
@@ -147,15 +160,23 @@ if __name__ == '__main__':
     for y in AminoAcid
   ])
 
-  Q, its = blahut_arimoto(W)
+  # Run BA using generated channel.
+  Q, its = blahut_arimoto(W, iterations=args.its)
+  for r, (Ip, m, M) in enumerate(its):
+    print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
-  if PLOT:
-    Is, ms, Ms = zip(*its)
-    plt.plot(range(1, len(Is)+1), Is, lw=2, marker='x', label='I(Q,W)')
-    plt.plot(range(1, len(ms)+1), ms, lw=2, marker='o', label='min T-log Q')
-    plt.plot(range(1, len(Ms)+1), Ms, lw=2, marker='o', label='max T-log Q')
-    plt.xlabel('iteration')
-    plt.ylabel('mutual info (bounds)')
-    plt.legend(loc='lower right')
-    plt.show()
+  if args.plot:
+    plot(Q, its)
+
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser('Blahut-Arimoto Algorithm for ribosome')
+  parser.add_argument('--bits', action='store_true', help='use log base 2')
+  parser.add_argument('--plot', action='store_true', help='plot convergence')
+  parser.add_argument('-p', type=float, default=1e-4, help='channel noise')
+  parser.add_argument('--its', type=int, default=10, help='num iterations')
+  args = parser.parse_args()
+  main(args)
+
+
 

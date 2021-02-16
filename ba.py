@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
+import Bio.Data.CodonTable
 import argparse
 import itertools
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+
 
 from enum import Enum
+
+BITS = True
+PLOT = True
+log = np.log2 if BITS else np.log
+exp = (lambda x: 2**x) if BITS else np.exp
+p = 1e-4
 
 # The 4 bases for mRNA.
 Base = Enum('Base', ['A', 'C', 'G', 'U'])
@@ -22,7 +32,7 @@ AminoAcid = Enum('AminoAcid', [
 ])
 
 
-def I(Q, W, V):
+def I(Q, W):
   '''
   Compute the mutual information between Q and W:
 
@@ -34,7 +44,7 @@ def I(Q, W, V):
     * I2 = Q @ log Q
 
   Ip = sum(
-    Q[i]*W[j,i]*np.log(V[i,j]/Q[i])
+    Q[i]*W[j,i]*log(V[i,j]/Q[i])
     for i in range(x)
     for j in range(y)
   )
@@ -44,21 +54,25 @@ def I(Q, W, V):
 
   assert Q.shape == (x,)
   assert W.shape == (y, x)
-  assert V.shape == (x, y)
-
-  # Check distribution properties.
   assert np.isclose(Q.sum(), 1.)
-  assert np.isclose(W.sum(axis=0), np.ones(x))
-  assert np.isclose(V.sum(axis=0), np.ones(y))
+  assert np.all(np.isclose(W.sum(axis=0), 1.))
 
-  I1 = (W.T * np.log(V)).sum(axis=1) @ Q
-  I2 = Q @ np.log(Q)
+  R = W@Q
+  V = (W*Q).T/R
+
+  assert R.shape == (y, )
+  assert V.shape == (x, y)
+  assert np.isclose(R.sum(), 1.)
+  assert np.all(np.isclose(V.sum(axis=0), 1.))
+
+  I1 = (W.T * log(V)).sum(axis=1) @ Q
+  I2 = Q @ log(Q)
   mI = I1 - I2
 
-  return I1 + I2
+  return mI
 
 
-def blahut_arimoto(R, W, V, iterations=10):
+def blahut_arimoto(W, iterations=10):
   '''
   Computes the channel capacity C(W)= max_Q I(Q, W),
   where the mutual information is given by:
@@ -70,23 +84,24 @@ def blahut_arimoto(R, W, V, iterations=10):
   W(y|x) = P(Y=y|X=x)
   V(x|y) = P(X=x|Y=y)
 
-  returns Q after some iterations.
+  returns (Q, its) after some iterations, where its is info from each iteration.
   '''
   # x = |X| and y = |Y|.
   x, y = len(Codon), len(AminoAcid)
 
-  assert R.shape == (y,)
   assert W.shape == (y, x)
-  assert V.shape == (x, y)
 
   # Check distribution properties.
-  assert np.isclose(R.sum(), 1.)
-  assert np.isclose(W.sum(axis=0), np.ones(x))
-  assert np.isclose(V.sum(axis=0), np.ones(y))
+  assert np.all(np.isclose(W.sum(axis=0), 1.))
 
   # Initialize Q as the uniform distribution.
-  Q = np.ones(x) / x
+  pd = np.random.randn(x)
+  Q = exp(pd) / np.sum(exp(pd)) # np.ones(x) / x
 
+  print(f'iteration #0: I(Q, W)={I(Q, W)}')
+
+  # List of (mutual info, lower bound, upper bound).
+  its = []
   for r in range(iterations):
     '''
     Want to compute T(x) = \sum_y W(y|x)log(Q(x)W(y|x)/R(y)).
@@ -97,29 +112,50 @@ def blahut_arimoto(R, W, V, iterations=10):
 
     Tx = np.array([
       sum(
-        W[j,i]*np.log(Q[i]*W[j,i]/sum(W[j,ip]*Q[ip] for ip in range(x)))
+        W[j,i]*log(Q[i]*W[j,i]/sum(W[j,ip]*Q[ip] for ip in range(x)))
         for j in range(y)
       ) for i in range(x)
     ])
     '''
-    T1 = np.log(Q)
-    T2 = (W*np.log(W)).sum(axis=0)
+    T1 = log(Q)
+    T2 = (W*log(W)).sum(axis=0)
     R = W@Q
-    T3 = W.T@np.log(R)
+    T3 = W.T@log(R)
     T = T1 + T2 - T3
 
     # Compute new probability distribution.
-    eT = np.exp(T)
+    eT = exp(T)
     Q = eT/eT.sum()
 
-    diff = T-np.log(Q)
+    diff = T-log(Q)
     m, M = min(diff), max(diff)
-    print(r, m, M, diff)
+    Ip = I(Q, W)
+    its.append((Ip, m, M))
+    print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
-  return Q
+  return Q, its
 
 
+if __name__ == '__main__':
+  rna = Bio.Data.CodonTable.standard_rna_table
+  Gx = {**rna.forward_table, **{codon: 'Stop' for codon in rna.stop_codons}}
+  G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
+  W = np.array([[
+      1-p if G[x] == y else p/20
+      for x in Codon
+    ]
+    for y in AminoAcid
+  ])
 
+  Q, its = blahut_arimoto(W)
 
-
+  if PLOT:
+    Is, ms, Ms = zip(*its)
+    plt.plot(range(1, len(Is)+1), Is, lw=2, marker='x', label='I(Q,W)')
+    plt.plot(range(1, len(ms)+1), ms, lw=2, marker='o', label='min T-log Q')
+    plt.plot(range(1, len(Ms)+1), Ms, lw=2, marker='o', label='max T-log Q')
+    plt.xlabel('iteration')
+    plt.ylabel('mutual info (bounds)')
+    plt.legend(loc='lower right')
+    plt.show()
 

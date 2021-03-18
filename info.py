@@ -82,9 +82,10 @@ def get_codon_mass(df, taxid):
   returns a 64 length numpy array for the codon mass (lexicographic order).
   '''
   # Extract correct row based on taxonomy id.
-  tf = df[df['Taxid'] == taxid]
+  tf = df[(df['Taxid'] == taxid) & (df['Organelle'] == 'genomic')]
   assert not tf.empty, len(tf)
-  ttf = tf[[codon.name for codon in Codon]].loc[0].to_numpy()
+  tff = tf[[codon.name for codon in Codon]]
+  ttf = tff.iloc[0].to_numpy()
 
   # Check that database is telling the truth.
   n = tf['# Codons'].squeeze()
@@ -121,6 +122,7 @@ def main(args):
     for y in AminoAcid
   ])
 
+  print(Q)
   # Finally, plot the info.
   plot(Q, W, p, species, args.taxid)
 

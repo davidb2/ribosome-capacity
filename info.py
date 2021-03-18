@@ -9,6 +9,7 @@ import pandas as pd
 import pathlib
 import seaborn as sns
 
+from Bio.Seq import Seq
 from enum import Enum
 
 '''
@@ -104,6 +105,11 @@ def I(Q, W):
   return mI
 
 
+def dna2rna(dna):
+  '''Converts a string of dna to a string of rna.'''
+  return str(Seq(dna).transcribe())
+
+
 def plot(Q, W, p, species, taxid, bits):
   '''
   plot Q and list I(Q,W).
@@ -140,7 +146,7 @@ def plot(Q, W, p, species, taxid, bits):
   # Add codon labels manually.
   for i, (bar, codon, ts) in enumerate(zip(bars, Codon, theta_shifted)):
     ax.text(
-      ts, radius, codon.name, ha='center', va='center',
+      ts, radius, dna2rna(codon.name), ha='center', va='center',
       rotation=np.rad2deg((i+1/2)*2*np.pi/len(Codon)),
       color=bar.get_facecolor(), family='monospace',
     )

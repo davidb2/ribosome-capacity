@@ -191,6 +191,7 @@ def main(args):
     df = pd.read_pickle(PICKLE_FILE)
   else:
     df = pd.read_csv(args.bank, sep='\\t+', engine='python')
+    df.to_pickle(PICKLE_FILE)
 
   # Get codon usage from database.
   Q, species = get_codon_mass(df, args.taxid)

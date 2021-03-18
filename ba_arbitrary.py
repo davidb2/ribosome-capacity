@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
 import Bio.Data.CodonTable
 import argparse
+import decimal
 import itertools
+import math
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 
+from decimal import Decimal
 from enum import Enum
 
-sns.set_theme()
 
+log = lambda x: Decimal(x).ln()
+exp = lambda x: Decimal(x).exp()
 
-log = np.log
-exp = np.exp
+def isclose(a, b):
+  prec = decimal.getcontext().prec
+  return abs(a-Decimal(b)) <= 10**(3-prec)
+
+def dmap(A, f):
+  s = A.shape
+  ax = A.flatten()
+  na = np.array([Decimal(f(x)) for x in ax])
+  Ap = na.reshape(s)
+  return Ap
 
 # The 4 bases for mRNA.
 Base = Enum('Base', ['A', 'C', 'G', 'U'])
@@ -53,19 +64,19 @@ def I(Q, W):
 
   assert Q.shape == (x,)
   assert W.shape == (y, x)
-  assert np.isclose(Q.sum(), 1.)
-  assert np.all(np.isclose(W.sum(axis=0), 1.))
+  assert isclose(Q.sum(), 1.)
+  assert np.all(isclose(W.sum(axis=0), 1.))
 
   R = W@Q
   V = (W*Q).T/R
 
   assert R.shape == (y, )
   assert V.shape == (x, y)
-  assert np.isclose(R.sum(), 1.)
-  assert np.all(np.isclose(V.sum(axis=0), 1.))
+  assert isclose(R.sum(), 1.)
+  assert np.all(isclose(V.sum(axis=0), 1.))
 
-  I1 = (W.T * log(V)).sum(axis=1) @ Q
-  I2 = Q @ log(Q)
+  I1 = (W.T * dmap(V, log)).sum(axis=1) @ Q
+  I2 = Q @ dmap(Q, log)
   mI = I1 - I2
 
   return mI
@@ -91,10 +102,10 @@ def blahut_arimoto(W, iterations=10):
   assert W.shape == (y, x)
 
   # Check distribution properties.
-  assert np.all(np.isclose(W.sum(axis=0), 1.))
+  assert np.all(isclose(W.sum(axis=0), 1.))
 
   # Initialize Q as the uniform distribution.
-  Q = np.ones(x) / x
+  Q = np.array([Decimal(q) for q in np.ones(x)]) / x
 
   # List of (mutual info, lower bound, upper bound).
   its = []
@@ -113,20 +124,19 @@ def blahut_arimoto(W, iterations=10):
       ) for i in range(x)
     ])
     '''
-    T1 = log(Q)
-    T2 = (W*log(W)).sum(axis=0)
+    T1 = dmap(Q, log)
+    T2 = (W*dmap(W, log)).sum(axis=0)
     R = W@Q
-    T3 = W.T@log(R)
+    T3 = W.T@dmap(R, log)
     T = T1 + T2 - T3
 
-    diff = T-log(Q)
-    # print(diff)
-    m, M = np.min(diff), np.max(diff)
+    diff = T-dmap(Q, log)
+    m, M = min(diff), max(diff)
     Ip = I(Q, W)
     its.append((Ip, m, M))
 
     # Compute new probability distribution.
-    eT = exp(T)
+    eT = dmap(T, exp)
     Q = eT/eT.sum()
 
   return Q, its
@@ -146,7 +156,9 @@ def plot(Q, its):
 def main(args):
   global log, exp
   if args.bits:
-    log, exp = np.log2, lambda x: 2**x
+    log, exp = (lambda x: Decimal(x).log10()/Decimal(2).log10(), (lambda x: 2**x))
+
+  decimal.getcontext().prec = args.prec
 
   # Get codon table.
   rna = Bio.Data.CodonTable.standard_rna_table
@@ -156,7 +168,7 @@ def main(args):
   # Generate channel noise distribution.
   p = args.p
   W = np.array([[
-      1-p if G[x] == y else p/20
+      Decimal(1-p if G[x] == y else p/20)
       for x in Codon
     ]
     for y in AminoAcid
@@ -167,24 +179,6 @@ def main(args):
   for r, (Ip, m, M) in enumerate(its):
     print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
-  print(Q)
-  fQ = np.cumsum(Q)
-  # plt.plot(range(len(Q)), Q, lw=2, marker='o', label='pmf')
-  # plt.plot(range(len(Q)), fQ, lw=2, marker='x', label='cdf')
-  # plt.xlabel('codons')
-  # plt.ylabel('p')
-  # plt.ylim(bottom=0)
-  # plt.legend(loc='upper left')
-
-  theta = np.linspace(0, 2*np.pi, len(Codon), endpoint=False)
-  radii = Q
-  # plt.polar(theta, radii)
-  colors = plt.cm.hot(radii/(2*np.max(radii)))
-  ax = plt.subplot(111, projection='polar')
-  ax.bar(theta, radii, width=theta[1], bottom=0.0, color=colors, alpha=0.5)
-  ax.set_xticks(theta)
-  # ax.xticks(range(len(Q)), [x.name for x in Codon], rotation=-90)
-  plt.show()
   if args.plot:
     plot(Q, its)
 
@@ -193,7 +187,12 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser('Blahut-Arimoto Algorithm for ribosome')
   parser.add_argument('--bits', action='store_true', help='use log base 2')
   parser.add_argument('--plot', action='store_true', help='plot convergence')
-  parser.add_argument('-p', type=float, default=1e-4, help='channel noise')
   parser.add_argument('--its', type=int, default=10, help='num iterations')
+  parser.add_argument(
+    '-p', type=Decimal, default=Decimal('0.0001'), help='channel noise'
+  )
+  parser.add_argument(
+    '--prec', type=int, default=10, help='num digits of precision'
+  )
   args = parser.parse_args()
   main(args)

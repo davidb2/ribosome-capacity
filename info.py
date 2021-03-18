@@ -2,6 +2,7 @@
 import Bio.Data.CodonTable
 import argparse
 import itertools
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -26,22 +27,14 @@ Codon = Enum('Codon', [
 ])
 
 
-def plot(Q, W, p):
+def plot(Q, W, p, species, taxid):
   '''pmf of Q and calculate pmf'''
-
-  # print(Q)
-  # fQ = np.cumsum(Q)
-  # plt.plot(range(len(Q)), Q, lw=2, marker='o', label='pmf')
-  # plt.plot(range(len(Q)), fQ, lw=2, marker='x', label='cdf')
-  # plt.xlabel('codons')
-  # plt.ylabel('p')
-  # plt.ylim(bottom=0)
-  # plt.legend(loc='upper left')
-
+  # Create a polar graph.
   theta = np.linspace(0, 2*np.pi, len(Codon), endpoint=False)
   radii = Q
   radius = np.max(Q)
-  colors = plt.cm.hot(radii/(2*np.max(radii)))
+  cm = plt.cm.hot
+  colors = cm(radii/(2*np.max(radii)))
   ax = plt.subplot(111, projection='polar')
   bars = ax.bar(
     theta, radii,
@@ -49,26 +42,36 @@ def plot(Q, W, p):
     alpha=0.5, align='edge',
   )
 
-  # Turn off polar labels
-  # ax.axes.get_xaxis().set_visible(False)
-  # ax.axes.get_yaxis().set_visible(False)
   # Set the outer ring to be invisible.
-  ax.spines["polar"].set_visible(False)
-  # # Set the grid line locations but set the labels to be invisible.
+  ax.spines['polar'].set_visible(False)
+
+  # Set the grid line locations but set the labels to be invisible.
   ax.grid(False)
   ax.set_thetagrids([], visible=False)
   ax.set_rgrids([3], visible=False)
-  theta_shifted=theta-theta[1]/2
+  theta_shifted = theta - theta[1]/2
+
+  # Add codon labels manually.
   for i, (bar, codon, ts) in enumerate(zip(bars, Codon, theta_shifted)):
     ax.text(
       ts, radius, codon.name, ha='center', va='center',
-      rotation=np.rad2deg((i)*2*np.pi/len(Codon)),
+      rotation=np.rad2deg(i*2*np.pi/len(Codon)),
       color=bar.get_facecolor(), family='monospace',
     )
-  # ax.xticks(range(len(Q)), [x.name for x in Codon], rotation=-90)
-  plt.show()
+
+  # Add color legend.
+  cmap, norm = mcolors.from_levels_and_colors(range(len(Q)+1), colors)
+  sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+  sm.set_array([])
+  # plt.colorbar(sm)
+  # plt.colorbar(sm)
+  # plt.colorbar()
+
+  # Set title.
   info = I(Q, W)
-  # ax.text(f'Info: {info}')
+  plt.title(f'Species: {species}, Taxid: {taxid}, I(Q,W)={info} w/ p={p}')
+
+  plt.show()
 
 
 def get_codon_mass(df, taxid):
@@ -88,7 +91,7 @@ def get_codon_mass(df, taxid):
   actual_n = ttf.sum()
   assert actual_n == n, (actual_n, n)
 
-  return ttf / n
+  return (ttf / n, tf['Species'].squeeze())
 
 
 def main(args):
@@ -102,7 +105,7 @@ def main(args):
     df = pd.read_csv(args.bank, sep='\\t+', engine='python')
 
   # Get codon usage from database.
-  Q = get_codon_mass(df, args.taxid)
+  Q, species = get_codon_mass(df, args.taxid)
 
   # Get codon table.
   dna = Bio.Data.CodonTable.standard_dna_table
@@ -119,7 +122,7 @@ def main(args):
   ])
 
   # Finally, plot the info.
-  plot(Q, W, p)
+  plot(Q, W, p, species, args.taxid)
 
 
 if __name__ == '__main__':

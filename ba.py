@@ -56,16 +56,27 @@ def I(Q, W):
   assert np.isclose(Q.sum(), 1.)
   assert np.all(np.isclose(W.sum(axis=0), 1.))
 
+  # We should ignore zeros.
   R = W@Q
-  V = (W*Q).T/R
+  with np.errstate(divide='ignore', invalid='ignore'):
+    V = (W*Q).T/R
+    V[~np.isfinite(V)] = 0  # -inf inf NaN
 
   assert R.shape == (y, )
   assert V.shape == (x, y)
   assert np.isclose(R.sum(), 1.)
   assert np.all(np.isclose(V.sum(axis=0), 1.))
 
-  I1 = (W.T * log(V)).sum(axis=1) @ Q
-  I2 = Q @ log(Q)
+  with np.errstate(divide='ignore', invalid='ignore'):
+    lV = log(V)
+    lV[~np.isfinite(lV)] = 0
+
+  I1 = (W.T * lV).sum(axis=1) @ Q
+  with np.errstate(divide='ignore', invalid='ignore'):
+    lQ = log(Q)
+    lQ[~np.isfinite(lQ)] = 0
+
+  I2 = Q @ lQ
   mI = I1 - I2
 
   return mI
@@ -168,23 +179,6 @@ def main(args):
     print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
   print(Q)
-  fQ = np.cumsum(Q)
-  # plt.plot(range(len(Q)), Q, lw=2, marker='o', label='pmf')
-  # plt.plot(range(len(Q)), fQ, lw=2, marker='x', label='cdf')
-  # plt.xlabel('codons')
-  # plt.ylabel('p')
-  # plt.ylim(bottom=0)
-  # plt.legend(loc='upper left')
-
-  theta = np.linspace(0, 2*np.pi, len(Codon), endpoint=False)
-  radii = Q
-  # plt.polar(theta, radii)
-  colors = plt.cm.hot(radii/(2*np.max(radii)))
-  ax = plt.subplot(111, projection='polar')
-  ax.bar(theta, radii, width=theta[1], bottom=0.0, color=colors, alpha=0.5)
-  ax.set_xticks(theta)
-  # ax.xticks(range(len(Q)), [x.name for x in Codon], rotation=-90)
-  plt.show()
   if args.plot:
     plot(Q, its)
 

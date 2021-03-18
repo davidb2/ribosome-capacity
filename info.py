@@ -9,13 +9,32 @@ import pandas as pd
 import pathlib
 import seaborn as sns
 
-from ba import I, Codon, AminoAcid
 from enum import Enum
+
+'''
+A script to plot codon usage from CoCoPUTs.
+Sources:
+  * https://pubmed.ncbi.nlm.nih.gov/31029701/
+  * https://hive.biochemistry.gwu.edu/cuts/about
+
+Before running, you will need to install some packages:
+  ```
+  > python3 -m pip install biopython matplotlib numpy pandas seaborn
+  ```
+
+A typical invocation of the program looks like:
+  ```
+  > python3 info.py --bits --taxid=7227
+  ```
+'''
 
 sns.set_theme()
 
 BANK_FILE = 'o586358-genbank_species.tsv'
 PICKLE_FILE = 'species.pkl'
+
+log = np.log
+exp = np.exp
 
 # The 4 bases for DNA.
 Base = Enum('Base', ['A', 'C', 'G', 'T'])
@@ -26,9 +45,76 @@ Codon = Enum('Codon', [
   for idx, codon in enumerate(itertools.product(Base, repeat=3))
 ])
 
+# Creates 20 amino acids + a stop.
+AminoAcid = Enum('AminoAcid', [
+  'A', 'C', 'D', 'E', 'F', 'G', 'H',
+  'I', 'K', 'L', 'M', 'N', 'P', 'Q',
+  'R', 'S', 'T', 'V', 'W', 'Y', 'Stop',
+])
 
-def plot(Q, W, p, species, taxid):
-  '''pmf of Q and calculate pmf'''
+
+def I(Q, W):
+  '''
+  Compute the mutual information between Q and W:
+
+  I(Q, W) = \sum_x\sum_y Q(x)W(y|x)log(V(x|y)/Q(x))
+          = \sum_x Q(x)\sum_y W(y|x)log(V(x|y)) - \sum_x Q(x)log(Q(x))
+          = I1 - I2
+  where:
+    * I1 = diag(W.T @ log V.T) @ Q
+    * I2 = Q @ log Q
+
+  Ip = sum(
+    Q[i]*W[j,i]*log(V[i,j]/Q[i])
+    for i in range(x)
+    for j in range(y)
+  )
+  '''
+  # x = |X| and y = |Y|.
+  x, y = len(Codon), len(AminoAcid)
+
+  assert Q.shape == (x,)
+  assert W.shape == (y, x)
+  assert np.isclose(Q.sum(), 1.)
+  assert np.all(np.isclose(W.sum(axis=0), 1.))
+
+  # We should ignore zeros.
+  R = W@Q
+  with np.errstate(divide='ignore', invalid='ignore'):
+    V = (W*Q).T/R
+    V[~np.isfinite(V)] = 0  # -inf inf NaN
+
+  assert R.shape == (y, )
+  assert V.shape == (x, y)
+  assert np.isclose(R.sum(), 1.)
+  assert np.all(np.isclose(V.sum(axis=0), 1.))
+
+  with np.errstate(divide='ignore', invalid='ignore'):
+    lV = log(V)
+    lV[~np.isfinite(lV)] = 0
+
+  I1 = (W.T * lV).sum(axis=1) @ Q
+  with np.errstate(divide='ignore', invalid='ignore'):
+    lQ = log(Q)
+    lQ[~np.isfinite(lQ)] = 0
+
+  I2 = Q @ lQ
+  mI = I1 - I2
+
+  return mI
+
+
+def plot(Q, W, p, species, taxid, bits):
+  '''
+  plot Q and list I(Q,W).
+
+  :Q:       the pmf of the codons.
+  :W:       the channel.
+  :p:       the noise of the channel.
+  :species: the name of the species.
+  :taxid:   the unique taxonomy id.
+  :bits:    a bool which is True iff we are using log2 to compute I(Q,W).
+  '''
   # Create a polar graph.
   theta = np.linspace(0, 2*np.pi, len(Codon), endpoint=False)
   radii = Q
@@ -49,27 +135,22 @@ def plot(Q, W, p, species, taxid):
   ax.grid(False)
   ax.set_thetagrids([], visible=False)
   ax.set_rgrids([3], visible=False)
-  theta_shifted = theta - theta[1]/2
+  theta_shifted = theta + theta[1]/2
 
   # Add codon labels manually.
   for i, (bar, codon, ts) in enumerate(zip(bars, Codon, theta_shifted)):
     ax.text(
       ts, radius, codon.name, ha='center', va='center',
-      rotation=np.rad2deg(i*2*np.pi/len(Codon)),
+      rotation=np.rad2deg((i+1/2)*2*np.pi/len(Codon)),
       color=bar.get_facecolor(), family='monospace',
     )
 
-  # Add color legend.
-  cmap, norm = mcolors.from_levels_and_colors(range(len(Q)+1), colors)
-  sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-  sm.set_array([])
-  # plt.colorbar(sm)
-  # plt.colorbar(sm)
-  # plt.colorbar()
+  # TODO(davidb2): Add color legend.
 
   # Set title.
   info = I(Q, W)
-  plt.title(f'Species: {species}, Taxid: {taxid}, I(Q,W)={info} w/ p={p}')
+  base = 'bits' if bits else 'base e'
+  plt.title(f'Species: {species}, Taxid: {taxid}, I(Q,W)={info} {(base)} w/ p={p}')
 
   plt.show()
 
@@ -83,7 +164,7 @@ def get_codon_mass(df, taxid):
   '''
   # Extract correct row based on taxonomy id.
   tf = df[(df['Taxid'] == taxid) & (df['Organelle'] == 'genomic')]
-  assert not tf.empty, len(tf)
+  assert not tf.empty, f'could not find unique entry with taxid={taxid}.'
   tff = tf[[codon.name for codon in Codon]]
   ttf = tff.iloc[0].to_numpy()
 
@@ -124,7 +205,7 @@ def main(args):
 
   print(Q)
   # Finally, plot the info.
-  plot(Q, W, p, species, args.taxid)
+  plot(Q, W, p, species, args.taxid, args.bits)
 
 
 if __name__ == '__main__':

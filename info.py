@@ -53,6 +53,10 @@ AminoAcid = Enum('AminoAcid', [
   'R', 'S', 'T', 'V', 'W', 'Y', 'Stop',
 ])
 
+# Get codon table.
+DNA = Bio.Data.CodonTable.standard_dna_table
+Gx = {**DNA.forward_table, **{codon: 'Stop' for codon in DNA.stop_codons}}
+G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
 
 def I(Q, W):
   '''
@@ -107,12 +111,12 @@ def I(Q, W):
 
 def dna2rna(dna):
   '''Converts a string of dna to a string of rna.'''
-  return str(Seq(dna).transcribe())
+  return str(Seq(dna).complement().transcribe())
 
 
-def plot(Q, W, p, species, taxid, bits):
+def disk_plot(Q, W, p, species, taxid, bits):
   '''
-  plot Q and list I(Q,W).
+  disk plot of Q and list I(Q,W).
 
   :Q:       the pmf of the codons.
   :W:       the channel.
@@ -144,9 +148,10 @@ def plot(Q, W, p, species, taxid, bits):
   theta_shifted = theta + theta[1]/2
 
   # Add codon labels manually.
-  for i, (bar, codon, ts) in enumerate(zip(bars, Codon, theta_shifted)):
+  scodons = sorted(dna2rna(codon.name) for codon in Codon)
+  for i, (bar, codon, ts) in enumerate(zip(bars, scodons, theta_shifted)):
     ax.text(
-      ts, radius, dna2rna(codon.name), ha='center', va='center',
+      ts, radius, codon, ha='center', va='center',
       rotation=np.rad2deg((i+1/2)*2*np.pi/len(Codon)),
       color=bar.get_facecolor(), family='monospace',
     )
@@ -154,9 +159,9 @@ def plot(Q, W, p, species, taxid, bits):
   # TODO(davidb2): Add color legend.
 
   # Set title.
-  info = I(Q, W)
+  IQW = I(Q, W)
   base = 'bits' if bits else 'base e'
-  plt.title(f'Species: {species}, Taxid: {taxid}, I(Q,W)={info} {(base)} w/ p={p}')
+  plt.title(f'Species: {species}, Taxid: {taxid}, I(Q,W)={IQW} ({base}) w/ p={p}')
 
   plt.show()
 
@@ -171,7 +176,8 @@ def get_codon_mass(df, taxid):
   # Extract correct row based on taxonomy id.
   tf = df[(df['Taxid'] == taxid) & (df['Organelle'] == 'genomic')]
   assert not tf.empty, f'could not find unique entry with taxid={taxid}.'
-  tff = tf[[codon.name for codon in Codon]]
+  codons = sorted([codon.name for codon in Codon], key=dna2rna)
+  tff = tf[codons]
   ttf = tff.iloc[0].to_numpy()
 
   # Check that database is telling the truth.
@@ -180,6 +186,48 @@ def get_codon_mass(df, taxid):
   assert actual_n == n, (actual_n, n)
 
   return (ttf / n, tf['Species'].squeeze())
+
+def create_channel(p):
+  '''Creates the noisy channel W w/ p as the noise.'''
+  return np.array([[
+      1-p if G[x] == y else p/20
+      for x in Codon
+    ]
+    for y in AminoAcid
+  ])
+
+
+def info(args, df):
+  '''Plot mutual info wrt p.'''
+  # Get codon usage from database.
+  Q, species = get_codon_mass(df, args.taxid)
+
+  ps, iqs = list(zip(*(
+    (p, I(Q, create_channel(p)))
+    for p in np.linspace(start=0, stop=1, num=args.n)
+  )))
+
+  base = 'bits' if args.bits else 'base e'
+  plt.title(f'Species: {species}, Taxid: {args.taxid}, p vs. I(Q,W)')
+  plt.xlabel('p')
+  plt.ylabel(f'Information ({base})')
+  plt.plot(ps, iqs, linewidth=2, marker='x')
+  plt.show()
+
+
+def disk(args, df):
+  '''Command if wanting to plot an individual species condon usage.'''
+  # Get codon usage from database.
+  Q, species = get_codon_mass(df, args.taxid)
+
+
+  # Generate channel noise distribution.
+  p = args.p
+  W = create_channel(p)
+
+  print(Q)
+  # Finally, plot the info.
+  disk_plot(Q, W, p, species, args.taxid, args.bits)
 
 
 def main(args):
@@ -193,34 +241,27 @@ def main(args):
     df = pd.read_csv(args.bank, sep='\\t+', engine='python')
     df.to_pickle(PICKLE_FILE)
 
-  # Get codon usage from database.
-  Q, species = get_codon_mass(df, args.taxid)
-
-  # Get codon table.
-  dna = Bio.Data.CodonTable.standard_dna_table
-  Gx = {**dna.forward_table, **{codon: 'Stop' for codon in dna.stop_codons}}
-  G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
-
-  # Generate channel noise distribution.
-  p = args.p
-  W = np.array([[
-      1-p if G[x] == y else p/20
-      for x in Codon
-    ]
-    for y in AminoAcid
-  ])
-
-  print(Q)
-  # Finally, plot the info.
-  plot(Q, W, p, species, args.taxid, args.bits)
-
+  if args.command == 'disk':
+    disk(args, df)
+  elif args.command == 'info':
+    info(args, df)
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser('Map the pmf of Q.')
-  parser.add_argument('--taxid', type=int, required=True, help='taxonomy id')
+  parser = argparse.ArgumentParser('Utilities related to mutual information.')
   parser.add_argument('--bits', action='store_true', help='use log base 2')
   parser.add_argument('--bank', type=pathlib.Path, default=BANK_FILE, help='species file')
   parser.add_argument('--no-cache', action='store_true', help='do not use pickle')
-  parser.add_argument('-p', type=float, default=1e-4, help='channel noise')
+
+  subparsers = parser.add_subparsers(dest='command', required=True)
+
+  diskc = subparsers.add_parser('disk', help='plot codon usage as a disk')
+  diskc.add_argument('-p', type=float, default=1e-4, help='channel noise')
+
+  infoc = subparsers.add_parser('info', help='plot p vs. I(Q,W)')
+  infoc.add_argument('-n', type=int, default=10, help='number of intervals for p')
+
+  for subparser in subparsers.choices.values():
+    subparser.add_argument('--taxid', type=int, required=True, help='taxonomy id')
+
   args = parser.parse_args()
   main(args)

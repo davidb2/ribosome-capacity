@@ -25,7 +25,8 @@ Before running, you will need to install some packages:
 
 A typical invocation of the program looks like:
   ```
-  > python3 info.py --bits --taxid=7227
+  > python3 info.py --bits disk --taxid=7227 -p=.001
+  > python3 info.py --bits info --taxid=6239 -n=40
   ```
 '''
 

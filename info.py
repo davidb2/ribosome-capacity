@@ -2,19 +2,20 @@
 import Bio.Data.CodonTable
 import argparse
 import itertools
+import json
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pathlib
 import pickle
+import redis
 import seaborn as sns
 
 from Bio import Entrez
 from Bio.Seq import Seq
 from collections import defaultdict
 from enum import Enum
-from itertools import groupby
 from tqdm import tqdm
 
 '''
@@ -41,7 +42,11 @@ BANK_FILE = 'o586358-genbank_species.tsv'
 PICKLE_FILE = 'species.pkl'
 AUTHOR_EMAIL = 'davidb2@illinois.edu'
 RANKS_PKL = 'ranks.pkl'
+REDIS_HOST = 'localhost'
+REDIS_PORT = 8000
+REDIS_NAME = 'cluster'
 
+redis_store = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
 Entrez.email = AUTHOR_EMAIL
 
 log = np.log
@@ -223,14 +228,27 @@ def cluster(args, df):
   actual_n = tff.sum(axis=1)
   assert (actual_n == n).all(), (actual_n, n)
   Qs = tff.div(n, axis=0)
+  tfs = tf['Taxid'].tolist()
+
+  # Map from taxid to codon frequency/percentage.
+  tid2Q = {}
+  for tid, Qx in tqdm(zip(tfs, Qs.itertuples()), desc='tid2Q', total=len(tfs)):
+    Q = np.array(Qx)[1:]
+    tid2Q[tid] = Q
+
+  # TaxIds we have not recorded yet.
+  rtfs = [
+    str(tid)
+    for tid in tqdm(tfs, desc='rtfs')
+    if not redis_store.hexists(name=REDIS_NAME, key=tid)
+  ]
+  print(f'# missing taxids: {len(rtfs)}')
 
   # Start fetches.
-  tfs = tf['Taxid'].tolist()
-  tids = ','.join([str(tid) for tid in tfs])
+  tids = ','.join(rtfs)
   CHUNK_SIZE = 10000
-  NUM_ITEMS = len(tfs)
+  NUM_ITEMS = len(rtfs)
 
-  records = []
   for idx in tqdm(range(NUM_ITEMS // CHUNK_SIZE), desc='fetching handles'):
     handle = Entrez.efetch(
       db='Taxonomy',
@@ -239,55 +257,65 @@ def cluster(args, df):
       retstart=idx*CHUNK_SIZE,
       retmax=CHUNK_SIZE,
     )
+
     print('reading records ...')
-    chunk_records = Entrez.read(handle)
-    records.extend(chunk_records)
+    records = Entrez.read(handle)
 
+    for record in tqdm(records, desc='records'):
+      tid = int(record['TaxId'])
+      if tid not in tid2Q:
+        print(f'tid {tid} not found in tid2Q')
+        continue
 
-  tid2Q = {}
-  for tid, Qx in tqdm(zip(tfs, Qs.itertuples()), desc='tid2Q', total=len(tfs)):
-    Q = np.array(Qx)[1:]
-    tid2Q[tid] = Q
-
-
-  ranks = {}
-  for record in tqdm(records, desc='records'):
-    tid = int(record['TaxId'])
-    if tid not in tid2Q:
-      print(f'tid {tid} not found in tid2Q')
-      continue
-
-    Q = tid2Q[tid]
-    ranks[tid] = {
-      'mutual_info': I(Q, W),
-      'name': str(record['ScientificName']),
-      'taxid': int(record['TaxId']),
-      'ranks': {
-        str(lineage['Rank']): {
-          'name': str(lineage['ScientificName']),
-          'taxid': int(lineage['TaxId']),
-        }
-        for lineage in record['LineageEx']
-      }
-    }
-
-  print('dumping cluster ...')
-  with open(RANKS_PKL, 'wb') as f:
-    pickle.dump(ranks, f)
+      Q = tid2Q[tid]
+      redis_store.hset(REDIS_NAME, mapping={
+        tid: json.dumps({
+          'mutual_info': I(Q, W),
+          'name': str(record['ScientificName']),
+          'taxid': int(record['TaxId']),
+          'ranks': {
+            str(lineage['Rank']): {
+              'name': str(lineage['ScientificName']),
+              'taxid': int(lineage['TaxId']),
+            }
+            for lineage in itertools.chain(record, record['LineageEx'])
+          }
+        })
+      })
 
   # Create a box plot for the mutual information by superkingdom.
   groups = defaultdict(list)
-  for k, v in ranks.items():
-    if 'species' not in v['ranks']: continue
-    group = v['ranks']['superkingdom']['name']
+  n_entries = redis_store.hlen(name=REDIS_NAME)
+  entries = redis_store.hscan_iter(name=REDIS_NAME)
+  for k, vv in tqdm(entries, desc='HSCAN', total=n_entries):
+    v = json.loads(vv)
+    ranks = v['ranks']
+    cls = None
+    if 'superkingdom' in ranks:
+      cls = ranks['superkingdom']
+    elif 'no rank' in ranks:
+      cls = ranks['no rank']
+    else:
+      print('class not found')
+      print(f'taxid: {k}')
+      print(json.dumps(v, indent=2, sort_keys=True))
+      continue
+
+    group = cls['name']
     mutual_info = v['mutual_info']
     groups[group].append(mutual_info)
 
-  labels, data = zip(*groups.items())
+  data = list(groups.values())
+  labels = [
+    f'{label} (n={len(datum)})'
+    for label, datum in groups.items()
+  ]
+
   plt.boxplot(x=data, labels=labels)
   plt.title(f'Mutual Info based on superkingdom')
   plt.xlabel('Superkingdom')
-  plt.ylabel(f'Mutual Information')
+  plt.xticks(rotation=-25)
+  plt.ylabel(f'Mutual Information (bits)')
   plt.show()
 
 

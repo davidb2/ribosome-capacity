@@ -2,4 +2,5 @@
 *.swo
 *.tsv
 *.pkl
+*.rdb
 __pycache__/

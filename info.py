@@ -7,10 +7,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pathlib
+import pickle
 import seaborn as sns
 
+from Bio import Entrez
 from Bio.Seq import Seq
+from collections import defaultdict
 from enum import Enum
+from itertools import groupby
+from tqdm import tqdm
 
 '''
 A script to plot codon usage from CoCoPUTs.
@@ -34,6 +39,10 @@ sns.set_theme()
 
 BANK_FILE = 'o586358-genbank_species.tsv'
 PICKLE_FILE = 'species.pkl'
+AUTHOR_EMAIL = 'davidb2@illinois.edu'
+RANKS_PKL = 'ranks.pkl'
+
+Entrez.email = AUTHOR_EMAIL
 
 log = np.log
 exp = np.exp
@@ -188,6 +197,7 @@ def get_codon_mass(df, taxid):
 
   return (ttf / n, tf['Species'].squeeze())
 
+
 def create_channel(p):
   '''Creates the noisy channel W w/ p as the noise.'''
   return np.array([[
@@ -196,6 +206,89 @@ def create_channel(p):
     ]
     for y in AminoAcid
   ])
+
+
+def cluster(args, df):
+  '''Cluster species by I(Q; W)'''
+  codons = sorted([codon.name for codon in Codon], key=dna2rna)
+  p = args.p
+  W = create_channel(p)
+
+  # Extract correct row based on taxonomy id.
+  tf = df[df['Organelle'] == 'genomic']
+  tff = tf[codons]
+
+  # Check that database is telling the truth.
+  n = tf['# Codons']
+  actual_n = tff.sum(axis=1)
+  assert (actual_n == n).all(), (actual_n, n)
+  Qs = tff.div(n, axis=0)
+
+  # Start fetches.
+  tfs = tf['Taxid'].tolist()
+  tids = ','.join([str(tid) for tid in tfs])
+  CHUNK_SIZE = 10000
+  NUM_ITEMS = len(tfs)
+
+  records = []
+  for idx in tqdm(range(NUM_ITEMS // CHUNK_SIZE), desc='fetching handles'):
+    handle = Entrez.efetch(
+      db='Taxonomy',
+      id=tids,
+      retmode='xml',
+      retstart=idx*CHUNK_SIZE,
+      retmax=CHUNK_SIZE,
+    )
+    print('reading records ...')
+    chunk_records = Entrez.read(handle)
+    records.extend(chunk_records)
+
+
+  tid2Q = {}
+  for tid, Qx in tqdm(zip(tfs, Qs.itertuples()), desc='tid2Q', total=len(tfs)):
+    Q = np.array(Qx)[1:]
+    tid2Q[tid] = Q
+
+
+  ranks = {}
+  for record in tqdm(records, desc='records'):
+    tid = int(record['TaxId'])
+    if tid not in tid2Q:
+      print(f'tid {tid} not found in tid2Q')
+      continue
+
+    Q = tid2Q[tid]
+    ranks[tid] = {
+      'mutual_info': I(Q, W),
+      'name': str(record['ScientificName']),
+      'taxid': int(record['TaxId']),
+      'ranks': {
+        str(lineage['Rank']): {
+          'name': str(lineage['ScientificName']),
+          'taxid': int(lineage['TaxId']),
+        }
+        for lineage in record['LineageEx']
+      }
+    }
+
+  print('dumping cluster ...')
+  with open(RANKS_PKL, 'wb') as f:
+    pickle.dump(ranks, f)
+
+  # Create a box plot for the mutual information by superkingdom.
+  groups = defaultdict(list)
+  for k, v in ranks.items():
+    if 'species' not in v['ranks']: continue
+    group = v['ranks']['superkingdom']['name']
+    mutual_info = v['mutual_info']
+    groups[group].append(mutual_info)
+
+  labels, data = zip(*groups.items())
+  plt.boxplot(x=data, labels=labels)
+  plt.title(f'Mutual Info based on superkingdom')
+  plt.xlabel('Superkingdom')
+  plt.ylabel(f'Mutual Information')
+  plt.show()
 
 
 def info(args, df):
@@ -221,7 +314,6 @@ def disk(args, df):
   # Get codon usage from database.
   Q, species = get_codon_mass(df, args.taxid)
 
-
   # Generate channel noise distribution.
   p = args.p
   W = create_channel(p)
@@ -246,6 +338,8 @@ def main(args):
     disk(args, df)
   elif args.command == 'info':
     info(args, df)
+  elif args.command == 'cluster':
+    cluster(args, df)
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser('Utilities related to mutual information.')
@@ -257,12 +351,14 @@ if __name__ == '__main__':
 
   diskc = subparsers.add_parser('disk', help='plot codon usage as a disk')
   diskc.add_argument('-p', type=float, default=1e-4, help='channel noise')
+  diskc.add_argument('--taxid', type=int, required=True, help='taxonomy id')
 
   infoc = subparsers.add_parser('info', help='plot p vs. I(Q,W)')
   infoc.add_argument('-n', type=int, default=10, help='number of intervals for p')
+  infoc.add_argument('--taxid', type=int, required=True, help='taxonomy id')
 
-  for subparser in subparsers.choices.values():
-    subparser.add_argument('--taxid', type=int, required=True, help='taxonomy id')
+  clusterc = subparsers.add_parser('cluster', help='cluster I(Q,W) for different species')
+  clusterc.add_argument('-p', type=float, default=1e-4, help='channel noise')
 
   args = parser.parse_args()
   main(args)

@@ -46,7 +46,6 @@ REDIS_HOST = 'localhost'
 REDIS_PORT = 8000
 REDIS_NAME = 'cluster'
 
-redis_store = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
 Entrez.email = AUTHOR_EMAIL
 
 log = np.log
@@ -215,6 +214,9 @@ def create_channel(p):
 
 def cluster(args, df):
   '''Cluster species by I(Q; W)'''
+  # Initialize our storage early.
+  redis_store = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
+
   codons = sorted([codon.name for codon in Codon], key=dna2rna)
   p = args.p
   W = create_channel(p)
@@ -229,12 +231,16 @@ def cluster(args, df):
   assert (actual_n == n).all(), (actual_n, n)
   Qs = tff.div(n, axis=0)
   tfs = tf['Taxid'].tolist()
+  tns = n.tolist()
 
-  # Map from taxid to codon frequency/percentage.
+  # Map from taxid to codon frequency/percentage and number of codons.
   tid2Q = {}
-  for tid, Qx in tqdm(zip(tfs, Qs.itertuples()), desc='tid2Q', total=len(tfs)):
+  tid2n = {}
+  triples = zip(tfs, Qs.itertuples(), tns)
+  for tid, Qx, n_codons in tqdm(triples, desc='tid2Q', total=len(tfs)):
     Q = np.array(Qx)[1:]
     tid2Q[tid] = Q
+    tid2n[tid] = n_codons
 
   # TaxIds we have not recorded yet.
   rtfs = [
@@ -242,13 +248,15 @@ def cluster(args, df):
     for tid in tqdm(tfs, desc='rtfs')
     if not redis_store.hexists(name=REDIS_NAME, key=tid)
   ]
-  print(f'# missing taxids: {len(rtfs)}')
+  print(f'# taxids missing from redis store: {len(rtfs)}')
 
   # Start fetches.
   tids = ','.join(rtfs)
   CHUNK_SIZE = 10000
   NUM_ITEMS = len(rtfs)
+  missing_tids = []
 
+  # TODO(davidb2): parallelize this.
   for idx in tqdm(range(NUM_ITEMS // CHUNK_SIZE), desc='fetching handles'):
     handle = Entrez.efetch(
       db='Taxonomy',
@@ -264,13 +272,16 @@ def cluster(args, df):
     for record in tqdm(records, desc='records'):
       tid = int(record['TaxId'])
       if tid not in tid2Q:
-        print(f'tid {tid} not found in tid2Q')
+        # print(f'tid {tid} not found in tid2Q')
+        missing_tids.append(tid)
         continue
 
       Q = tid2Q[tid]
+      n_codons = tid2n[tid]
       redis_store.hset(REDIS_NAME, mapping={
         tid: json.dumps({
           'mutual_info': I(Q, W),
+          'n_codons': n_codons,
           'name': str(record['ScientificName']),
           'taxid': int(record['TaxId']),
           'ranks': {
@@ -278,12 +289,45 @@ def cluster(args, df):
               'name': str(lineage['ScientificName']),
               'taxid': int(lineage['TaxId']),
             }
-            for lineage in itertools.chain(record, record['LineageEx'])
+            for lineage in itertools.chain([record], record['LineageEx'])
           }
         })
       })
 
-  # Create a box plot for the mutual information by superkingdom.
+  print(f'# taxids missing from cocoputs: {len(missing_tids)}')
+
+  # Plot data.
+  cluster_scatterplot(redis_store)
+  # cluster_boxplot_by(redis_store, key='superkingdom')
+
+
+def cluster_scatterplot(redis_store):
+  '''Create a scatterplot: number of codons vs. mutual_info.'''
+  xs, ys = [], []
+  n_entries = redis_store.hlen(name=REDIS_NAME)
+  entries = redis_store.hscan_iter(name=REDIS_NAME)
+  for k, vv in tqdm(entries, desc='HSCAN', total=n_entries):
+    v = json.loads(vv)
+    if 'n_codons' not in v:
+      print(f'tid {k} does not have n_codons')
+      continue
+    xs.append(v['n_codons'])
+    ys.append(v['mutual_info'])
+
+  from scipy.stats import pearsonr, spearmanr
+  pr = pearsonr(xs, ys)
+  sr = spearmanr(xs, ys)
+
+  plt.scatter(xs, ys)
+  plt.title(f'Number of codons vs Mutual Info (pearson r={pr}, spearman r={sr})')
+  plt.xlabel('number of codons')
+  plt.ylabel(f'Mutual Information (bits)')
+  plt.xscale('log')
+  plt.show()
+
+
+def cluster_boxplot_by(redis_store, key):
+  '''Create a box plot for the mutual information by superkingdom.'''
   groups = defaultdict(list)
   n_entries = redis_store.hlen(name=REDIS_NAME)
   entries = redis_store.hscan_iter(name=REDIS_NAME)
@@ -291,8 +335,8 @@ def cluster(args, df):
     v = json.loads(vv)
     ranks = v['ranks']
     cls = None
-    if 'superkingdom' in ranks:
-      cls = ranks['superkingdom']
+    if key in ranks:
+      cls = ranks[key]
     elif 'no rank' in ranks:
       cls = ranks['no rank']
     else:

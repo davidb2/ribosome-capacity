@@ -161,14 +161,14 @@ def main(args):
   decimal.getcontext().prec = args.prec
 
   # Get codon table.
-  rna = Bio.Data.CodonTable.standard_rna_table
+  rna = Bio.Data.CodonTable.unambiguous_rna_by_id[args.id]
   Gx = {**rna.forward_table, **{codon: 'Stop' for codon in rna.stop_codons}}
   G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
 
   # Generate channel noise distribution.
   p = args.p
   W = np.array([[
-      Decimal(1-p if G[x] == y else p/20)
+      Decimal(1-p if G[x] == y else p/(len(AminoAcid)-1))
       for x in Codon
     ]
     for y in AminoAcid
@@ -193,6 +193,9 @@ if __name__ == '__main__':
   )
   parser.add_argument(
     '--prec', type=int, default=10, help='num digits of precision'
+  )
+  parser.add_argument(
+    '--id', type=int, default=1, help='the id of the codon table from NCBI',
   )
   args = parser.parse_args()
   main(args)

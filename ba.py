@@ -160,14 +160,14 @@ def main(args):
     log, exp = np.log2, lambda x: 2**x
 
   # Get codon table.
-  rna = Bio.Data.CodonTable.standard_rna_table
+  rna = Bio.Data.CodonTable.unambiguous_rna_by_id[args.id]
   Gx = {**rna.forward_table, **{codon: 'Stop' for codon in rna.stop_codons}}
   G = {Codon[codon]: AminoAcid[aa] for codon, aa in Gx.items()}
 
   # Generate channel noise distribution.
   p = args.p
   W = np.array([[
-      1-p if G[x] == y else p/20
+      1-p if G[x] == y else p/(len(AminoAcid)-1)
       for x in Codon
     ]
     for y in AminoAcid
@@ -189,5 +189,8 @@ if __name__ == '__main__':
   parser.add_argument('--plot', action='store_true', help='plot convergence')
   parser.add_argument('-p', type=float, default=1e-4, help='channel noise')
   parser.add_argument('--its', type=int, default=10, help='num iterations')
+  parser.add_argument(
+    '--id', type=str, default=1, help='the id of the codon table from NCBI',
+  )
   args = parser.parse_args()
   main(args)

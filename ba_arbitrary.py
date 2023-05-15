@@ -152,6 +152,15 @@ def plot(Q, its):
   plt.legend(loc='lower right')
   plt.show()
 
+def plot_distribution(Q):
+  '''plot Q.'''
+  plt.title("Q distribution")
+  plt.bar([codon.name for codon in Codon], Q)
+  plt.xlabel('codons')
+  plt.ylabel('probability')
+  plt.xticks(rotation=-90)
+  plt.show()
+
 
 def main(args):
   global log, exp
@@ -182,11 +191,15 @@ def main(args):
   if args.plot:
     plot(Q, its)
 
+  if args.plot_distribution:
+    plot_distribution(Q)
+
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser('Blahut-Arimoto Algorithm for ribosome')
   parser.add_argument('--bits', action='store_true', help='use log base 2')
   parser.add_argument('--plot', action='store_true', help='plot convergence')
+  parser.add_argument('--plot-distribution', action='store_true', help='plot distribution')
   parser.add_argument('--its', type=int, default=10, help='num iterations')
   parser.add_argument(
     '-p', type=Decimal, default=Decimal('0.0001'), help='channel noise'

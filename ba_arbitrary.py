@@ -152,14 +152,31 @@ def plot(Q, its):
   plt.legend(loc='lower right')
   plt.show()
 
-def plot_distribution(Q):
+def plot_distribution(Q, show: bool = True):
   '''plot Q.'''
   plt.title("Q distribution")
   plt.bar([codon.name for codon in Codon], Q)
   plt.xlabel('codons')
   plt.ylabel('probability')
   plt.xticks(rotation=-90)
-  plt.show()
+  if show:
+    plt.show()
+
+def plot_hunch(G, show: bool = True):
+  '''plot hunch.'''
+  plt.title("Hunch Q distribution")
+  plt.bar(
+    x=[codon.name for codon in Codon],
+    height=[
+      (len(AminoAcid) * sum(bool(G[z] == G[x]) for z in Codon)) ** -1
+      for x in Codon
+    ]
+  )
+  plt.xlabel('codons')
+  plt.ylabel('probability')
+  plt.xticks(rotation=-90)
+  if show:
+    plt.show()
 
 
 def main(args):
@@ -188,11 +205,17 @@ def main(args):
   for r, (Ip, m, M) in enumerate(its):
     print(f'iteration #{r+1}: {m} <= {Ip} <= {M}')
 
+  # hcc = -len(AminoAcid) * (p/(len(AminoAcid)-1) + (1-len(AminoAcid)*p/(len(AminoAcid)-1))/len(AminoAcid) + len   )
+  a = (p/20 + (1-21*p/20)/21)
+  hcc = -21 * a * log(a) + 21*p/20*log(p/20) + p/20*log(p/20) - (1-p) * log(1-p)
+  print(f"hunch channel capacity: {hcc}")
   if args.plot:
     plot(Q, its)
 
   if args.plot_distribution:
-    plot_distribution(Q)
+    plot_distribution(Q, show=False)
+    plt.figure()
+    plot_hunch(G)
 
 
 if __name__ == '__main__':

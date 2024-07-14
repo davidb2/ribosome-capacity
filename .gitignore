@@ -4,3 +4,4 @@
 *.pkl
 *.rdb
 __pycache__/
+.env

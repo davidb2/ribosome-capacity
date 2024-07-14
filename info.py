@@ -37,8 +37,9 @@ A typical invocation of the program looks like:
   ```
 '''
 
-sns.set_theme(font_scale=2, rc={'text.usetex' : True})
-sns.set_style("whitegrid", {'axes.grid' : False})
+def set_sns():
+  sns.set_theme(font_scale=2, rc={'text.usetex' : True})
+  sns.set_style("whitegrid", {'axes.grid' : False})
 
 BANK_FILE = 'o586358-genbank_species.tsv'
 PICKLE_FILE = 'species.pkl'
@@ -546,11 +547,15 @@ def disk_gene(args):
   disk_plot(Q, W, p, None, None, base, args.id)
 
 
+def set_bits():
+  global log, exp
+  log, exp = np.log2, lambda x: 2**x
+
 def main(args):
   global log, exp
   assert not (args.bits and args.nucleotides), "pick only one base"
   if args.bits:
-    log, exp = np.log2, lambda x: 2**x
+    set_bits()
   if args.nucleotides:
     log, exp = lambda x: np.emath.logn(len(Nucleotide), x), lambda x: len(Nucleotide)**x
 

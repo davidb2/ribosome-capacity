@@ -39,7 +39,9 @@ def get_codons(rna: Seq):
   codon_seq = CodonSeq(str(rna))
 
   codons = [
-    codon_seq.get_codon(idx)
+    # codon_seq.get_codon(idx)
+    # Codon(np.random.randint(0, 64)+1).name
+    Codon(1).name
     for idx in range(num_codons)
   ]
   return codons
@@ -67,13 +69,13 @@ def get_info(args):
     return None
 
   codons = get_codons(rna)
-  if codons[0] not in CodonTable.standard_rna_table.start_codons:
-    print(f'bad mRNA start codon {codons[0]}', 'skipping...')
-    return None
+  # if codons[0] not in CodonTable.standard_rna_table.start_codons:
+  #   print(f'bad mRNA start codon {codons[0]}', 'skipping...')
+  #   return None
 
-  if codons[-1] not in CodonTable.standard_rna_table.stop_codons:
-    print(f'bad mRNA stop codon {codons[-1]}', 'skipping...')
-    return None
+  # if codons[-1] not in CodonTable.standard_rna_table.stop_codons:
+  #   print(f'bad mRNA stop codon {codons[-1]}', 'skipping...')
+  #   return None
 
 
   print(record.description)
@@ -126,15 +128,17 @@ def draw(df: pd.DataFrame):
 
   sns.histplot(data=df, x='information', ax=ax[0])
   ax[0].vlines(x=channel_capacity(), ymin=0, ymax=450, colors='r', linestyles='dashed')
+  ax[0].set_xticks([2.5+.25*i for i in range(9)])
 
   sns.histplot(data=df, x='distance from capacity achieving', ax=ax[1])
+  ax[1].set_xticks([.1 + .1*i for i in range(7)])
 
   plt.show()
 
 
 if __name__ == '__main__':
   W = create_channel(p=1e-4)
-  COMPUTE = False
+  COMPUTE = True
   df: Optional[pd.DataFrame] = None
   if COMPUTE:
     df = compute()

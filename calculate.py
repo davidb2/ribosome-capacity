@@ -4,6 +4,7 @@ import pandas as pd
 import seaborn as sns
 
 from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
 from Bio.codonalign.codonseq import CodonSeq
@@ -22,9 +23,25 @@ from multiprocessing import Pool
 from typing import *
 
 
-NUM_PROCESSES = 32
-FILENAME = '/Users/david/Downloads/ncbi/4932-genome-rna/ncbi_dataset/data/GCF_000146045.2/rna.fna'
+YEAST_TAXID = 4932
+ECOLI_TAXID = 562
+CRESS_TAXID = 3702
 
+NUM_PROCESSES = 32
+TAXID = YEAST_TAXID
+
+INPUT_FILENAME = {
+  # Saccharomyces cerevisiae (brewer/baker's yeast)
+  YEAST_TAXID: '/Users/david/Dropbox/experiments/ribosome-capacity/raw-data/ncbi/4932-genome-rna/ncbi_dataset/data/GCF_000146045.2_R64_cds_from_genomic.fna', # '/Users/david/Dropbox/experiments/ribosome-capacity/raw-data/ncbi/4932-genome-rna/ncbi_dataset/data/GCF_000146045.2/rna.fna',
+  # Escherichia coli
+  ECOLI_TAXID: '/Users/david/Dropbox/experiments/ribosome-capacity/raw-data/ncbi/562-genome-rna/ncbi_dataset/data/GCF_000157115.2_Escherichia_sp_3_2_53FAA_V2_cds_from_genomic.fna',
+  # Arabidopsis thaliana (thale cress)
+  CRESS_TAXID: '/Users/david/Dropbox/experiments/ribosome-capacity/raw-data/ncbi/3702-genome-rna/ncbi_dataset/data/GCF_000001735.4_TAIR10.1_cds_from_genomic.fna', # '/Users/david/Dropbox/experiments/ribosome-capacity/raw-data/ncbi/3702-genome-rna/ncbi_dataset/data/GCF_000001735.4/rna.fna',
+}[TAXID]
+
+OUTPUT_FILENAME = f'/Users/david/Dropbox/experiments/ribosome-capacity/pretty-data/Q-{TAXID}.csv'
+
+# Have to put it here due to how the multiprocessing package works.
 set_bits()
 
 def set_sns():
@@ -39,9 +56,9 @@ def get_codons(rna: Seq):
   codon_seq = CodonSeq(str(rna))
 
   codons = [
-    # codon_seq.get_codon(idx)
+    codon_seq.get_codon(idx)
     # Codon(np.random.randint(0, 64)+1).name
-    Codon(1).name
+    # Codon(1).name
     for idx in range(num_codons)
   ]
   return codons
@@ -58,14 +75,36 @@ def codons_to_Q(codons: List[str | CodonSeq]):
   assert np.isclose(Q.sum(), 1), Q.sum()
   return Q
 
+def is_valid(record: SeqRecord) -> bool:
+  """The fna files have different description formats."""
+  if TAXID == YEAST_TAXID:
+    if 'pseudo=true' in record.description: return False
+    # if 'mRNA' not in record.description: return False
+    return True
+  elif TAXID == ECOLI_TAXID:
+    if 'pseudo=true' in record.description: return False
+    return True
+  elif TAXID == CRESS_TAXID:
+    if 'pseudo=true' in record.description: return False
+    if 'pseudogene' in record.description: return False
+    # if 'mRNA' not in record.description: return False
+    return True
 
-def get_info(args):
+  return False
+
+def get_info(args: Tuple[SeqRecord, np.array]):
   record, W = args
-  if 'mRNA' not in record.description: return None
+
+  if not is_valid(record): return None
   rna = record.seq.transcribe()
 
   if len(rna) % CODON_LENGTH != 0:
     print('bad mRNA length', 'skipping...')
+    return None
+
+  unique_bps = set(Counter(str(rna)).keys())
+  if not unique_bps <= {'A', 'C', 'G', 'U'}:
+    print('found bad bp in rna strand; unique_bps:', unique_bps)
     return None
 
   codons = get_codons(rna)
@@ -77,17 +116,16 @@ def get_info(args):
   #   print(f'bad mRNA stop codon {codons[-1]}', 'skipping...')
   #   return None
 
-
   print(record.description)
   Q = codons_to_Q(codons)
-  return (I(Q,W), compute_dist_from_capacity_achieving(Q))
+  return (record.id, record.description, I(Q,W), compute_dist_from_capacity_achieving(Q))
 
 
 def compute():
   count = 0
   infos: List[Tuple[float, float]] = []
-  W = create_channel(p=1e-4)
-  with open(FILENAME, 'r') as handle:
+  W: np.array = create_channel(p=1e-4)
+  with open(INPUT_FILENAME, 'r') as handle:
     with Pool(processes=NUM_PROCESSES) as p:
       entries = ((record, W) for record in SeqIO.parse(handle, "fasta"))
       for result in p.imap_unordered(get_info, entries):
@@ -96,11 +134,11 @@ def compute():
           count += 1
 
   print(f"{count=}")
-  return pd.DataFrame(data=infos, columns=['information', 'distance from capacity achieving'])
+  return pd.DataFrame(data=infos, columns=['id', 'description', 'information', 'distance from capacity achieving'])
 
 
 def store(df: pd.DataFrame):
-  pd.to_pickle(df, 'Q.pkl')
+  df.to_csv(OUTPUT_FILENAME, index=False)
 
 
 def channel_capacity():
@@ -138,15 +176,10 @@ def draw(df: pd.DataFrame):
 
 if __name__ == '__main__':
   W = create_channel(p=1e-4)
-  COMPUTE = True
-  df: Optional[pd.DataFrame] = None
-  if COMPUTE:
-    df = compute()
-    store(df)
-  else:
-    df = pd.read_pickle('Q.pkl')
+  df = compute()
+  store(df)
 
   assert df is not None
 
-  print('drawing')
-  draw(df)
+  # print('drawing')
+  # draw(df)

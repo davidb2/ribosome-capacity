@@ -1,3 +1,4 @@
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -21,6 +22,8 @@ from info import (
 )
 from multiprocessing import Pool
 from typing import *
+from customlogger import logger
+from pathlib import Path
 
 
 YEAST_TAXID = 4932
@@ -77,20 +80,23 @@ def codons_to_Q(codons: List[str | CodonSeq]):
 
 def is_valid(record: SeqRecord) -> bool:
   """The fna files have different description formats."""
-  if TAXID == YEAST_TAXID:
-    if 'pseudo=true' in record.description: return False
-    # if 'mRNA' not in record.description: return False
-    return True
-  elif TAXID == ECOLI_TAXID:
-    if 'pseudo=true' in record.description: return False
-    return True
-  elif TAXID == CRESS_TAXID:
-    if 'pseudo=true' in record.description: return False
-    if 'pseudogene' in record.description: return False
-    # if 'mRNA' not in record.description: return False
-    return True
+  if 'pseudo=true' in record.description: return False
+  if 'pseudogene' in record.description: return False
+  return True
 
-  return False
+  # if TAXID == YEAST_TAXID:
+  #   if 'pseudo=true' in record.description: return False
+  #   # if 'mRNA' not in record.description: return False
+  #   return True
+  # elif TAXID == ECOLI_TAXID:
+  #   if 'pseudo=true' in record.description: return False
+  #   return True
+  # elif TAXID == CRESS_TAXID:
+  #   if 'pseudo=true' in record.description: return False
+  #   if 'pseudogene' in record.description: return False
+  #   # if 'mRNA' not in record.description: return False
+  #   return True
+
 
 def get_info(args: Tuple[SeqRecord, np.array]):
   record, W = args
@@ -99,12 +105,12 @@ def get_info(args: Tuple[SeqRecord, np.array]):
   rna = record.seq.transcribe()
 
   if len(rna) % CODON_LENGTH != 0:
-    print('bad mRNA length', 'skipping...')
+    logger.info(('bad mRNA length', 'skipping...'))
     return None
 
   unique_bps = set(Counter(str(rna)).keys())
   if not unique_bps <= {'A', 'C', 'G', 'U'}:
-    print('found bad bp in rna strand; unique_bps:', unique_bps)
+    logger.info(('found bad bp in rna strand; unique_bps:', unique_bps))
     return None
 
   codons = get_codons(rna)
@@ -116,16 +122,16 @@ def get_info(args: Tuple[SeqRecord, np.array]):
   #   print(f'bad mRNA stop codon {codons[-1]}', 'skipping...')
   #   return None
 
-  print(record.description)
+  logger.info(record.description)
   Q = codons_to_Q(codons)
   return (record.id, record.description, I(Q,W), compute_dist_from_capacity_achieving(Q))
 
 
-def compute():
+def compute(input_filename: str):
   count = 0
   infos: List[Tuple[float, float]] = []
   W: np.array = create_channel(p=1e-4)
-  with open(INPUT_FILENAME, 'r') as handle:
+  with open(input_filename, 'r') as handle:
     with Pool(processes=NUM_PROCESSES) as p:
       entries = ((record, W) for record in SeqIO.parse(handle, "fasta"))
       for result in p.imap_unordered(get_info, entries):
@@ -133,12 +139,12 @@ def compute():
           infos.append(result)
           count += 1
 
-  print(f"{count=}")
+  logger.info(f"{count=}")
   return pd.DataFrame(data=infos, columns=['id', 'description', 'information', 'distance from capacity achieving'])
 
 
-def store(df: pd.DataFrame):
-  df.to_csv(OUTPUT_FILENAME, index=False)
+def store(df: pd.DataFrame, output_filename: str):
+  df.to_csv(output_filename, index=False)
 
 
 def channel_capacity():
@@ -159,27 +165,14 @@ def channel_capacity():
   return I(Q, W)
 
 
-def draw(df: pd.DataFrame):
-  set_sns()
-
-  fig, ax = plt.subplots(nrows=1, ncols=2)
-
-  sns.histplot(data=df, x='information', ax=ax[0])
-  ax[0].vlines(x=channel_capacity(), ymin=0, ymax=450, colors='r', linestyles='dashed')
-  ax[0].set_xticks([2.5+.25*i for i in range(9)])
-
-  sns.histplot(data=df, x='distance from capacity achieving', ax=ax[1])
-  ax[1].set_xticks([.1 + .1*i for i in range(7)])
-
-  plt.show()
-
+def get_args():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--input-filename', type=str, default=INPUT_FILENAME)
+  parser.add_argument('--output-filename', type=str, default=OUTPUT_FILENAME)
+  return parser.parse_args()
 
 if __name__ == '__main__':
+  args = get_args()
   W = create_channel(p=1e-4)
-  df = compute()
-  store(df)
-
-  assert df is not None
-
-  # print('drawing')
-  # draw(df)
+  df = compute(args.input_filename)
+  store(df, args.output_filename)

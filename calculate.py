@@ -127,14 +127,14 @@ def get_info(args: Tuple[SeqRecord, np.array]):
   return (record.id, record.description, I(Q,W), compute_dist_from_capacity_achieving(Q))
 
 
-def compute(input_filename: str):
+def compute(input_filename: str, p: float):
   count = 0
   infos: List[Tuple[float, float]] = []
-  W: np.array = create_channel(p=1e-4)
+  W: np.array = create_channel(p)
   with open(input_filename, 'r') as handle:
-    with Pool(processes=NUM_PROCESSES) as p:
+    with Pool(processes=NUM_PROCESSES) as pool:
       entries = ((record, W) for record in SeqIO.parse(handle, "fasta"))
-      for result in p.imap_unordered(get_info, entries):
+      for result in pool.imap_unordered(get_info, entries):
         if result is not None:
           infos.append(result)
           count += 1
@@ -147,7 +147,7 @@ def store(df: pd.DataFrame, output_filename: str):
   df.to_csv(output_filename, index=False)
 
 
-def channel_capacity():
+def channel_capacity(p: float):
   subsets = [
     [
       idx
@@ -161,7 +161,7 @@ def channel_capacity():
     Q[subset] = (1/len(AminoAcid))/len(subset)
 
   assert np.isclose(Q.sum(), 1), Q.sum()
-  W = create_channel(p=1e-4)
+  W = create_channel(p)
   return I(Q, W)
 
 
@@ -169,10 +169,11 @@ def get_args():
   parser = argparse.ArgumentParser()
   parser.add_argument('--input-filename', type=str, default=INPUT_FILENAME)
   parser.add_argument('--output-filename', type=str, default=OUTPUT_FILENAME)
+  parser.add_argument('-p', type=float, default=1e-4, help='channel error rate')
   return parser.parse_args()
 
 if __name__ == '__main__':
   args = get_args()
-  W = create_channel(p=1e-4)
-  df = compute(args.input_filename)
+  W = create_channel(p=args.p)
+  df = compute(args.input_filename, args.p)
   store(df, args.output_filename)
